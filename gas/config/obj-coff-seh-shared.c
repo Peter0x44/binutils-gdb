@@ -77,8 +77,9 @@ alloc_pxdata_item (segT seg, subsegT subseg, char *name)
   return r;
 }
 
-/* Generate pdata/xdata segment with same linkonce properties
-   of based segment.  */
+/* Generate .pdata/.xdata.  When the code is COMDAT, make the side section
+   associative so duplicate selection and GC follow the function rather than
+   its section name.  */
 static segT
 make_pxdata_seg (segT cseg, char *name)
 {
@@ -97,9 +98,15 @@ make_pxdata_seg (segT cseg, char *name)
   /* Add standard section flags.  */
   flags |= SEC_ALLOC | SEC_LOAD | SEC_READONLY | SEC_DATA;
 
-  /* Apply possibly linked once flags to new generated segment, too.  */
+  /* Copy link-once flags first; the setter below changes the side section's
+     selection kind to associative.  */
   if (!bfd_set_section_flags (r, flags))
     as_bad (_("bfd_set_section_flags: %s"),
+	    bfd_errmsg (bfd_get_error ()));
+
+  if ((flags & SEC_LINK_ONCE) != 0
+      && !bfd_coff_set_comdat_associative (r, cseg))
+    as_bad (_("failed to associate section `%s': %s"), name,
 	    bfd_errmsg (bfd_get_error ()));
 
   /* Restore to previous segment.  */

@@ -52,6 +52,18 @@ static symbolS *def_symbol_in_progress;
 #ifdef TE_PE
 /* PE weak alternate symbols begin with this string.  */
 static const char weak_altprefix[] = ".weak.";
+
+/* A .section associative request is recorded by symbol because the parent's
+   section, flags, and own association may not be final while parsing.  */
+struct coff_comdat_association
+{
+  segT section;
+  symbolS *parent;
+  bool resolved;
+  struct coff_comdat_association *next;
+};
+
+static struct coff_comdat_association *coff_comdat_associations;
 #endif /* TE_PE */
 
 #include "obj-coff-seh-shared.c"
@@ -1512,6 +1524,68 @@ coff_adjust_section_syms (bfd *abfd ATTRIBUTE_UNUSED,
 void
 coff_frob_file_after_relocs (void)
 {
+#ifdef TE_PE
+  struct coff_comdat_association *association;
+  bool progress;
+
+  /* Resolve only after symbols and section flags are final.  Associating one
+     section makes it link-once and may therefore make it a valid parent for
+     another association, so continue to a fixed point.  */
+  do
+    {
+      progress = false;
+      for (association = coff_comdat_associations; association != NULL;
+	   association = association->next)
+	{
+	  symbolS *parent_symbol;
+
+	  if (association->resolved)
+	    continue;
+
+	  parent_symbol = association->parent;
+	  if (!S_IS_DEFINED (parent_symbol))
+	    {
+	      as_bad (_("associative COMDAT parent symbol `%s' is undefined"),
+		      S_GET_NAME (parent_symbol));
+	      association->resolved = true;
+	    }
+	  else
+	    {
+	      segT parent = S_GET_SEGMENT (parent_symbol);
+
+	      if (parent == absolute_section || parent == undefined_section)
+		{
+		  as_bad
+		    (_("associative COMDAT parent symbol `%s' is not in a"
+		       " link-once section"),
+		     S_GET_NAME (parent_symbol));
+		  association->resolved = true;
+		}
+	      else if ((bfd_section_flags (parent) & SEC_LINK_ONCE) != 0)
+		{
+		  if (!bfd_coff_set_comdat_associative (association->section,
+							parent))
+		    as_bad
+		      (_("failed to associate section `%s' with `%s': %s"),
+		       bfd_section_name (association->section),
+		       S_GET_NAME (parent_symbol),
+		       bfd_errmsg (bfd_get_error ()));
+		  association->resolved = true;
+		  progress = true;
+		}
+	    }
+	}
+    }
+  while (progress);
+
+  for (association = coff_comdat_associations; association != NULL;
+       association = association->next)
+    if (!association->resolved)
+      as_bad (_("associative COMDAT parent symbol `%s' is not in a"
+		 " link-once section"),
+	      S_GET_NAME (association->parent));
+#endif
+
   bfd_map_over_sections (stdoutput, coff_adjust_section_syms, NULL);
 }
 
@@ -1570,6 +1644,9 @@ obj_coff_section (int ignore ATTRIBUTE_UNUSED)
   flagword flags, oldflags;
   asection *sec;
   bool is_bss = false;
+#ifdef TE_PE
+  symbolS *associative_parent = NULL;
+#endif
 
   if (flag_mri)
     {
@@ -1691,6 +1768,52 @@ obj_coff_section (int ignore ATTRIBUTE_UNUSED)
 	}
     }
 
+#ifdef TE_PE
+  /* Parse the LLVM-compatible associative,PARENT suffix, but defer resolving
+     PARENT until all symbols and sections exist.  */
+  SKIP_WHITESPACE ();
+  if (*input_line_pointer == ',')
+    {
+      char *selection_copy;
+      char *selection_name;
+      char selection_end;
+      bool associative;
+
+      ++input_line_pointer;
+      SKIP_WHITESPACE ();
+      selection_end = get_symbol_name (&selection_name);
+      selection_copy = xstrdup (selection_name);
+      associative = streq (selection_name, "associative");
+      restore_line_pointer (selection_end);
+
+      if (!associative)
+	as_bad (_("unsupported COMDAT selection `%s'"), selection_copy);
+      else
+	{
+	  char *parent_name;
+	  char parent_end;
+
+	  SKIP_WHITESPACE ();
+	  if (*input_line_pointer != ',')
+	    as_bad (_("missing associative COMDAT parent symbol"));
+	  else
+	    {
+	      ++input_line_pointer;
+	      SKIP_WHITESPACE ();
+	      if (!is_name_beginner (*input_line_pointer))
+		as_bad (_("missing associative COMDAT parent symbol"));
+	      else
+		{
+		  parent_end = get_symbol_name (&parent_name);
+		  associative_parent = symbol_find_or_make (parent_name);
+		  restore_line_pointer (parent_end);
+		}
+	    }
+	}
+      free (selection_copy);
+    }
+#endif
+
   sec = subseg_new (name, exp);
 
   if (is_bss)
@@ -1730,6 +1853,23 @@ obj_coff_section (int ignore ATTRIBUTE_UNUSED)
       if ((flags ^ oldflags) & matchflags)
 	as_warn (_("Ignoring changed section attributes for %s"), name);
     }
+
+#ifdef TE_PE
+  if (associative_parent != NULL)
+    {
+      struct coff_comdat_association *association;
+
+      /* Keep every request until symbols resolve.  Different symbols in the
+	 same parent section describe the same edge; the BFD setter accepts that
+	 repeated edge and rejects genuinely conflicting parent sections.  */
+      association = XNEW (struct coff_comdat_association);
+      association->section = sec;
+      association->parent = associative_parent;
+      association->resolved = false;
+      association->next = coff_comdat_associations;
+      coff_comdat_associations = association;
+    }
+#endif
 
   demand_empty_rest_of_line ();
 }

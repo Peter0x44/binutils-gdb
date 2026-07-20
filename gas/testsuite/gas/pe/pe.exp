@@ -35,6 +35,13 @@ run_dump_test "long_file_symbol"
 run_dump_test "section-align-1"
 run_dump_test "section-align-3"
 run_dump_test "section-exclude"
+run_dump_test "section-associative"
+run_dump_test "section-associative-alias"
+run_dump_test "section-associative-chain"
+run_list_test "section-associative-conflict" ""
+run_list_test "section-associative-cycle" ""
+run_list_test "section-associative-err" ""
+run_list_test "section-associative-missing" ""
 
 run_dump_test "set"
 
@@ -57,6 +64,7 @@ if ([istarget "x86_64-*-mingw*"]) then {
 	run_dump_test "peseh-x64-4"
 	run_dump_test "peseh-x64-5"
 	run_dump_test "peseh-x64-6"
+	run_dump_test "peseh-x64-assoc"
 }
 
 
