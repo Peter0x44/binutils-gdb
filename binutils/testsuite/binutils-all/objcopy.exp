@@ -1341,6 +1341,36 @@ run_dump_test "copy-4"
 run_dump_test "copy-5"
 run_dump_test "copy-6"
 
+if [is_pecoff_format] {
+    run_dump_test "coff-associative-copy"
+
+    set test "objcopy reopens PE associative COMDAT"
+    if {![binutils_assemble $srcdir/$subdir/coff-associative-copy.s \
+	     tmpdir/coff-associative-copy-input.o]} then {
+	unsupported $test
+    } else {
+	set got [binutils_run $OBJCOPY "$OBJCOPYFLAGS --remove-section=.data \
+		tmpdir/coff-associative-copy-input.o tmpdir/coff-associative-copy-first.o"]
+	if {![string equal $got ""]} {
+	    fail $test
+	} else {
+	    set got [binutils_run $OBJCOPY "$OBJCOPYFLAGS \
+		    tmpdir/coff-associative-copy-first.o tmpdir/coff-associative-copy-second.o"]
+	    if {![string equal $got ""]} {
+		fail $test
+	    } else {
+		set got [binutils_run $OBJDUMP "$OBJDUMPFLAGS -t -j .assoc \
+			tmpdir/coff-associative-copy-second.o"]
+		if {[regexp {assoc 4 comdat 5} $got]} {
+		    pass $test
+		} else {
+		    fail $test
+		}
+	    }
+	}
+    }
+}
+
 # Use bintest.o from the copy-4 test to determine ELF reloc type
 set reloc_format rel
 if { [is_elf_format] && [is_rela tmpdir/bintest.o] } {
