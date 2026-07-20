@@ -18,6 +18,8 @@ fi
 # current implementation of dlltool (this could probably be changed to
 # use grouped sections instead).
 if test "${RELOCATING}"; then
+  R_PDATA='*(.pdata)
+    *(SORT(.pdata$*))'
   R_TEXT='*(SORT(.text$*))'
   if test "x$LD_FLAG" = "xauto_import" ; then
     R_DATA='*(SORT(.data$*))
@@ -67,6 +69,7 @@ if test "${RELOCATING}"; then
     KEEP (*(.rsrc))
     KEEP (*(.rsrc$*))'
 else
+  R_PDATA='*(.pdata)'
   R_TEXT=
   R_DATA=
   R_RDATA='*(.rdata)'
@@ -226,7 +229,7 @@ SECTIONS
 
   .pdata ${RELOCATING+BLOCK(__section_alignment__)} :
   {
-    KEEP(*(.pdata${RELOCATING+*}))
+    ${R_PDATA}
   }
 
   .bss ${RELOCATING+BLOCK(__section_alignment__)} :

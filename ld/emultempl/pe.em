@@ -2151,6 +2151,10 @@ gld${EMULATION_NAME}_place_orphan (asection *s,
   lang_statement_list_type add_child;
   lang_output_section_statement_type *match_by_name = NULL;
   lang_statement_union_type **pl;
+  /* In -r output, do not reuse a same-named orphan for an associative child:
+     each child output section can encode only one parent index.  */
+  bool associative = (bfd_link_relocatable (&link_info)
+		      && bfd_coff_get_comdat_associative_parent (s) != NULL);
 
   /* Look through the script to see where to place this section.  */
   if (!bfd_link_relocatable (&link_info)
@@ -2166,7 +2170,7 @@ gld${EMULATION_NAME}_place_orphan (asection *s,
   lang_list_init (&add_child);
 
   os = NULL;
-  if (constraint == 0)
+  if (constraint == 0 && !associative)
     for (os = lang_output_section_find (secname);
 	 os != NULL;
 	 os = next_matching_output_section_statement (os, 0))

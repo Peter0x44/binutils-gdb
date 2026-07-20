@@ -160,6 +160,47 @@ run_ld_link_tests $pr19803_dll
 
 if {[istarget x86_64-*-mingw*] } {
 	run_dump_test "cfi"
+
+	set associative_comdat_tests {
+	  {"PE associative COMDAT selection" "-e main" "" ""
+	   {assoc-comdat-root.s assoc-comdat-a.s assoc-comdat-b.s}
+	   {{objdump "-s -j .assoc" assoc-comdat.d}}
+	   "assoc-comdat.exe"}
+	  {"PE associative COMDAT GC" "--gc-sections -e main" "" ""
+	   {assoc-comdat-root.s assoc-comdat-a.s assoc-comdat-b.s}
+	   {{objdump "-s -j .assoc" assoc-comdat.d}}
+	   "assoc-comdat-gc.exe"}
+	  {"PE associative COMDAT child correspondence" "-e main" "" ""
+	   {assoc-comdat-order-root.s assoc-comdat-order-a.s
+	    assoc-comdat-order-b.s}
+	   {{objdump "-s -j .assoc1" assoc-comdat-order-one.d}
+	    {objdump "-s -j .assoc2" assoc-comdat-order-two.d}}
+	   "assoc-comdat-order.exe"}
+	  {"PE associative COMDAT relocatable output" "-r" "" ""
+	   {assoc-comdat-a.s}
+	   {{objdump "-t -j .assoc" assoc-comdat-rel.d}
+	    {objdump "-h -j .assoc" assoc-comdat-rel-h.d}}
+	   "assoc-comdat-rel.o"}
+	  {"PE associative COMDAT distinct relocatable sections" "-r" "" ""
+	   {assoc-comdat-multi-a.s assoc-comdat-multi-b.s}
+	   {{objdump "-h -j .rdata\\\$assoc" assoc-comdat-multi-h.d}
+	    {objdump "-t -j .rdata\\\$assoc" assoc-comdat-multi-t.d}
+	    {objdump "-s -j .rdata\\\$assoc" assoc-comdat-multi-s.d}}
+	   "assoc-comdat-multi-rel.o"}
+	  {"PE associative COMDAT one-only parent" "-r" "" ""
+	   {assoc-comdat-one-only.s}
+	   {{objdump "-t -j .assoc" assoc-comdat-rel.d}
+	    {objdump "-h -j .assoc" assoc-comdat-rel-h.d}}
+	   "assoc-comdat-one-only-rel.o"}
+	  {"PE associative COMDAT unwind GC compatibility"
+	   "--gc-sections -e main" "" ""
+	   {assoc-comdat-unwind.s}
+	   {{objdump "-s -j .pdata" assoc-comdat-unwind-pdata.d}
+	    {objdump "-s -j .xdata" assoc-comdat-unwind-xdata.d}
+	    {objdump "-s -j .text" assoc-comdat-unwind-text.d}}
+	   "assoc-comdat-unwind.exe"}
+	}
+	run_ld_link_tests $associative_comdat_tests
 } elseif {[istarget i*86-*-cygwin*] || [istarget i*86-*-mingw*] } {
 	run_dump_test "cfi32"
 }

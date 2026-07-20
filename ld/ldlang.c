@@ -758,6 +758,21 @@ wild_sort (lang_wild_statement_type *wild,
   return tree;
 }
 
+/* A relocatable COFF output section can encode only one associative parent.
+   Wildcard placement could merge same-named children of different parents,
+   so leave them to PE orphan placement, which preserves separate output
+   sections.  This also bypasses custom wildcard placement; honoring it safely
+   requires diagnosing attempts to merge children of incompatible parents.
+   An explicit /DISCARD/ still takes precedence.  */
+static bool
+skip_associative_comdat_wildcard
+  (asection *section, lang_output_section_statement_type *output)
+{
+  return (bfd_link_relocatable (&link_info)
+	  && strcmp (output->name, DISCARD_SECTION_NAME) != 0
+	  && bfd_coff_get_comdat_associative_parent (section) != NULL);
+}
+
 /* Use wild_sort to build a BST to sort sections.  */
 
 static void
@@ -774,6 +789,9 @@ output_section_callback_sort (lang_wild_statement_type *ptr,
   os = (lang_output_section_statement_type *) output;
 
   if (unique_section_p (section, os))
+    return;
+
+  if (skip_associative_comdat_wildcard (section, os))
     return;
 
   /* Don't add sections to the tree when we already know that
@@ -3028,6 +3046,9 @@ output_section_callback_nosort (lang_wild_statement_type *ptr,
 
   /* Exclude sections that match UNIQUE_SECTION_LIST.  */
   if (unique_section_p (section, os))
+    return;
+
+  if (skip_associative_comdat_wildcard (section, os))
     return;
 
   lang_add_section (&ptr->children, section, ptr->section_list,
