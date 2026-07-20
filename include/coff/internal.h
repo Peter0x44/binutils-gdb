@@ -607,7 +607,7 @@ union internal_auxent
     uint16_t x_nreloc;		/* # relocation entries */
     uint16_t x_nlinno;		/* # line numbers */
     uint32_t x_checksum;	/* section COMDAT checksum for PE */
-    uint16_t x_associated;	/* COMDAT associated section index for PE */
+    uint32_t x_associated;      /* COMDAT associated section index for PE */
     uint8_t x_comdat;		/* COMDAT selection number for PE */
   } x_scn;
 

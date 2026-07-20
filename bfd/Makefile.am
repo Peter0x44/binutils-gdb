@@ -926,7 +926,7 @@ stmp-bfd-h: bfd-in3.h
 	touch stmp-bfd-h
 
 BFD_H_FILES = bfd-in.h libbfd.c hash.c section.c syms.c \
-	archive.c archures.c bfd.c bfdio.c \
+	archive.c archures.c bfd.c bfdio.c coff-bfd.c \
 	cache.c compress.c corefile.c format.c linker.c opncls.c \
 	reloc.c simple.c stab-syms.c stabs.c targets.c
 BFD64_H_FILES = archive64.c

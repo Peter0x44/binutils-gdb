@@ -25,6 +25,130 @@
 #include "coff/internal.h"
 #include "libcoff.h"
 
+/*
+FUNCTION
+	bfd_coff_get_comdat_associative_parent
+
+SYNOPSIS
+	asection *bfd_coff_get_comdat_associative_parent
+	  (asection *section);
+
+DESCRIPTION
+	Return the immediate parent of an associative PE/COFF COMDAT
+	@var{section}, or <<NULL>> if @var{section} is not associative.
+*/
+
+asection *
+bfd_coff_get_comdat_associative_parent (asection *section)
+{
+  struct coff_section_tdata *section_data;
+
+  if (section == NULL || section->owner == NULL
+      || bfd_get_flavour (section->owner) != bfd_target_coff_flavour
+      || !obj_pe (section->owner))
+    return NULL;
+
+  section_data = coff_section_data (section->owner, section);
+  if (!coff_section_data_associative (section_data))
+    return NULL;
+
+  return section_data->comdat_associated_parent;
+}
+
+/*
+FUNCTION
+	bfd_coff_set_comdat_associative
+
+SYNOPSIS
+	bool bfd_coff_set_comdat_associative
+	  (asection *section, asection *parent);
+
+DESCRIPTION
+	Make the PE/COFF COMDAT @var{section} associative with @var{parent}.
+	Both sections must belong to the same PE/COFF BFD, and @var{parent}
+	must already be a link-once section.  Return <<TRUE>> on success.
+*/
+
+bool
+bfd_coff_set_comdat_associative (asection *section, asection *parent)
+{
+  bfd *abfd;
+  asection *ancestor;
+  struct coff_section_tdata *ancestor_data;
+  struct coff_section_tdata *parent_data;
+  struct coff_section_tdata *section_data;
+  unsigned int depth;
+  bool already_associative;
+
+  if (section == NULL || parent == NULL || section == parent
+      || section->owner == NULL || section->owner != parent->owner
+      || bfd_get_flavour (section->owner) != bfd_target_coff_flavour
+      || !obj_pe (section->owner) || (parent->flags & SEC_LINK_ONCE) == 0)
+    {
+      bfd_set_error (bfd_error_invalid_operation);
+      return false;
+    }
+
+  abfd = section->owner;
+  if (coff_section_data (abfd, section) == NULL)
+    {
+      section->used_by_bfd = bfd_zalloc (abfd,
+					 sizeof (struct coff_section_tdata));
+      if (section->used_by_bfd == NULL)
+	return false;
+    }
+  if (coff_section_data (abfd, parent) == NULL)
+    {
+      parent->used_by_bfd = bfd_zalloc (abfd,
+					sizeof (struct coff_section_tdata));
+      if (parent->used_by_bfd == NULL)
+	return false;
+    }
+
+  section_data = coff_section_data (abfd, section);
+  already_associative = coff_section_data_associative (section_data);
+  if (already_associative
+      && section_data->comdat_associated_parent != parent)
+    {
+      bfd_set_error (bfd_error_invalid_operation);
+      return false;
+    }
+
+  /* Validate the new edge before recording it.  PE/COFF permits associative
+     chains, but every chain must terminate at a non-associative COMDAT.  */
+  ancestor = parent;
+  depth = 0;
+  while (ancestor != NULL)
+    {
+      if (ancestor == section || ++depth > abfd->section_count)
+	{
+	  bfd_set_error (bfd_error_invalid_operation);
+	  return false;
+	}
+
+      ancestor_data = coff_section_data (abfd, ancestor);
+      if (!coff_section_data_associative (ancestor_data))
+	break;
+      ancestor = ancestor_data->comdat_associated_parent;
+    }
+
+  section_data->comdat_selection = COFF_COMDAT_SELECT_ASSOCIATIVE;
+  section_data->comdat_associated_parent_index = parent->target_index;
+  section_data->comdat_associated_parent = parent;
+
+  if (!already_associative)
+    {
+      parent_data = coff_section_data (abfd, parent);
+      section_data->comdat_associated_next
+	= parent_data->comdat_associated_child;
+      parent_data->comdat_associated_child = section;
+    }
+
+  section->flags &= ~SEC_LINK_DUPLICATES;
+  section->flags |= SEC_LINK_ONCE | SEC_LINK_DUPLICATES_DISCARD;
+  return true;
+}
+
 /* Return the COFF syment for a symbol.  */
 
 bool

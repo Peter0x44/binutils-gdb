@@ -2165,6 +2165,38 @@ _bfd_coff_link_input_bfd (struct coff_final_link_info *flaginfo, bfd *input_bfd)
 		  auxp = &aux;
 		}
 
+	      if (i == 0 && obj_pe (input_bfd) && isymp->n_sclass == C_STAT
+		  && isymp->n_type == T_NULL && isymp->n_scnum > 0)
+		{
+		  struct coff_section_tdata *section_data;
+		  asection *section;
+
+		  section = coff_section_from_bfd_index (input_bfd,
+							 isymp->n_scnum);
+		  section_data = coff_section_data (input_bfd, section);
+
+		  /* Input section-table indices are invalid after linking.  Follow a
+		     discarded parent to the parent that prevailed, then serialize
+		     that parent's final output section index.  */
+		  if (coff_section_data_associative (section_data))
+		    {
+		      asection *parent;
+
+		      parent = section_data->comdat_associated_parent;
+		      while (parent->output_section == bfd_abs_section_ptr
+			     && parent->kept_section != NULL)
+			parent = parent->kept_section;
+		      if (parent->output_section != NULL
+			  && parent->output_section != bfd_abs_section_ptr)
+			{
+			  auxp->x_scn.x_associated
+			    = parent->output_section->target_index;
+			  auxp->x_scn.x_comdat
+			    = section_data->comdat_selection;
+			}
+		    }
+		}
+
 	      if (isymp->n_sclass == C_FILE)
 		{
 		  /* If this is a long filename, we must put it in the

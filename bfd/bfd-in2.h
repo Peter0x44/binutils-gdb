@@ -1,8 +1,9 @@
 /* DO NOT EDIT!  -*- buffer-read-only: t -*-  This file is automatically
    generated from "bfd-in.h", "libbfd.c", "hash.c", "section.c",
-   "syms.c", "archive.c", "archures.c", "bfd.c", "bfdio.c", "cache.c",
-   "compress.c", "corefile.c", "format.c", "linker.c", "opncls.c",
-   "reloc.c", "simple.c", "stab-syms.c", "stabs.c" and "targets.c".
+   "syms.c", "archive.c", "archures.c", "bfd.c", "bfdio.c", "coff-bfd.c",
+   "cache.c", "compress.c", "corefile.c", "format.c", "linker.c",
+   "opncls.c", "reloc.c", "simple.c", "stab-syms.c", "stabs.c" and
+   "targets.c".
    Run "make headers" in your build bfd/ to regenerate.  */
 
 /* Main header file for the bfd library -- portable access to object files.
@@ -2876,6 +2877,13 @@ void *bfd_mmap (bfd *abfd, void *addr, size_t len,
 ATTRIBUTE_WARN_UNUSED_RESULT;
 
 time_t bfd_get_current_time (time_t now);
+
+/* Extracted from coff-bfd.c.  */
+asection *bfd_coff_get_comdat_associative_parent
+   (asection *section);
+
+bool bfd_coff_set_comdat_associative
+   (asection *section, asection *parent);
 
 /* Extracted from cache.c.  */
 bool bfd_cache_close (bfd *abfd);

@@ -978,7 +978,10 @@ fill_comdat_hash (bfd *abfd)
       if (*slot == NULL)
 	{
 	  if (isym.n_numaux != 1)
-	    aux.x_scn.x_comdat = 0;
+	    {
+	      aux.x_scn.x_comdat = 0;
+	      aux.x_scn.x_associated = 0;
+	    }
 	  else
 	    {
 	      /* PR 17512: file: e2cfe54f.  */
@@ -995,26 +998,10 @@ fill_comdat_hash (bfd *abfd)
 				    isym.n_numaux, &aux);
 	    }
 
-	  /* FIXME: Microsoft uses NODUPLICATES and ASSOCIATIVE, but
-	     gnu uses ANY and SAME_SIZE.  Unfortunately, gnu doesn't
-	     do the comdat symbols right.  So, until we can fix it to
-	     do the right thing, we are temporarily disabling comdats
-	     for the MS types (they're used in DLLs and C++, but we
-	     don't support *their* C++ libraries anyway - DJ.  */
-
-	  /* Cygwin does not follow the MS style, and uses ANY and
-	     SAME_SIZE where NODUPLICATES and ASSOCIATIVE should be
-	     used.  For Interix, we just do the right thing up
-	     front.  */
-
 	  switch (aux.x_scn.x_comdat)
 	    {
 	    case IMAGE_COMDAT_SELECT_NODUPLICATES:
-#ifdef STRICT_PE_FORMAT
 	      sec_flags |= SEC_LINK_DUPLICATES_ONE_ONLY;
-#else
-	      sec_flags &= ~SEC_LINK_ONCE;
-#endif
 	      break;
 
 	    case IMAGE_COMDAT_SELECT_ANY:
@@ -1036,12 +1023,7 @@ fill_comdat_hash (bfd *abfd)
 		 table.  Is this the right place to play this game?
 		 Or should we do it when reading it in?  */
 	    case IMAGE_COMDAT_SELECT_ASSOCIATIVE:
-#ifdef STRICT_PE_FORMAT
-	      /* FIXME: This is not currently implemented.  */
 	      sec_flags |= SEC_LINK_DUPLICATES_DISCARD;
-#else
-	      sec_flags &= ~SEC_LINK_ONCE;
-#endif
 	      break;
 
 	    default:  /* 0 means "no symbol" */
@@ -1055,6 +1037,8 @@ fill_comdat_hash (bfd *abfd)
 	    return false;
 	  struct comdat_hash_entry *newentry = *slot;
 	  newentry->sec_flags = sec_flags;
+	  newentry->selection = aux.x_scn.x_comdat;
+	  newentry->associated_section = aux.x_scn.x_associated;
 	  newentry->symname = bfd_strdup (symname);
 	  newentry->target_index = isym.n_scnum;
 	  newentry->isym = isym;
@@ -1178,6 +1162,9 @@ handle_COMDAT (bfd *abfd, flagword *sec_flags, const char *name,
 					 found->comdat_symbol))
 	    return false;
 	}
+      coff_section_data (abfd, section)->comdat_selection = found->selection;
+      coff_section_data (abfd, section)->comdat_associated_parent_index
+	= found->associated_section;
       *sec_flags = *sec_flags | found->sec_flags;
       return true;
     }
@@ -3851,7 +3838,9 @@ coff_write_object_contents (bfd * abfd)
 	  count = bfd_get_symcount (abfd);
 	  for (i = 0, psym = abfd->outsymbols; i < count; i++, psym++)
 	    {
-	      if ((*psym)->section != current)
+	      if ((*psym)->section != current
+		  && ((*psym)->section == NULL
+		      || (*psym)->section->output_section != current))
 		continue;
 
 	      /* Remember the location of the first symbol in this
@@ -3883,33 +3872,62 @@ coff_write_object_contents (bfd * abfd)
 	  if (i < count)
 	    {
 	      combined_entry_type *aux;
+	      bool associative;
+	      struct coff_section_tdata *section_data;
 
-	      /* We don't touch the x_checksum field.  The
-		 x_associated field is not currently supported.  */
+	      /* We don't touch the x_checksum field.  */
 
 	      aux = csym->native + 1;
 	      BFD_ASSERT (! aux->is_sym);
-	      switch (current->flags & SEC_LINK_DUPLICATES)
+	      section_data = coff_section_data (abfd, current);
+	      associative = coff_section_data_associative (section_data);
+	      if (associative
+		  || aux->u.auxent.x_scn.x_comdat
+		       == IMAGE_COMDAT_SELECT_ASSOCIATIVE)
 		{
-		case SEC_LINK_DUPLICATES_DISCARD:
-		  aux->u.auxent.x_scn.x_comdat = IMAGE_COMDAT_SELECT_ANY;
-		  break;
+		  asection *parent;
 
-		case SEC_LINK_DUPLICATES_ONE_ONLY:
-		  aux->u.auxent.x_scn.x_comdat =
-		    IMAGE_COMDAT_SELECT_NODUPLICATES;
-		  break;
-
-		case SEC_LINK_DUPLICATES_SAME_SIZE:
-		  aux->u.auxent.x_scn.x_comdat =
-		    IMAGE_COMDAT_SELECT_SAME_SIZE;
-		  break;
-
-		case SEC_LINK_DUPLICATES_SAME_CONTENTS:
-		  aux->u.auxent.x_scn.x_comdat =
-		    IMAGE_COMDAT_SELECT_EXACT_MATCH;
-		  break;
+		  parent = NULL;
+		  if (associative)
+		    parent = section_data->comdat_associated_parent;
+		  if (parent == NULL || parent->owner != abfd
+		      || parent->target_index <= 0)
+		    {
+		      _bfd_error_handler
+			(_("%pB: associative COMDAT section %pA has no valid"
+			   " parent in the output BFD"), abfd, current);
+		      bfd_set_error (bfd_error_bad_value);
+		      return false;
+		    }
+		  /* Section ordering may have changed while building this BFD.
+		     Serialize the resolved output parent, not the input auxiliary
+		     record's section number.  */
+		  aux->u.auxent.x_scn.x_comdat
+		    = IMAGE_COMDAT_SELECT_ASSOCIATIVE;
+		  aux->u.auxent.x_scn.x_associated = parent->target_index;
 		}
+	      else
+		switch (current->flags & SEC_LINK_DUPLICATES)
+		  {
+		  case SEC_LINK_DUPLICATES_DISCARD:
+		    aux->u.auxent.x_scn.x_comdat = IMAGE_COMDAT_SELECT_ANY;
+		    break;
+
+		  case SEC_LINK_DUPLICATES_ONE_ONLY:
+		    aux->u.auxent.x_scn.x_comdat
+		      = IMAGE_COMDAT_SELECT_NODUPLICATES;
+		    break;
+
+		  case SEC_LINK_DUPLICATES_SAME_SIZE:
+		    aux->u.auxent.x_scn.x_comdat
+		      = IMAGE_COMDAT_SELECT_SAME_SIZE;
+		    break;
+
+		  case SEC_LINK_DUPLICATES_SAME_CONTENTS:
+		    aux->u.auxent.x_scn.x_comdat
+		      = IMAGE_COMDAT_SELECT_EXACT_MATCH;
+		    break;
+		  }
 
 	      /* The COMDAT symbol must be the first symbol from this
 		 section in the symbol table.  In order to make this
@@ -5896,14 +5914,14 @@ coff_bigobj_swap_aux_out (bfd * abfd,
   union internal_auxent * in = (union internal_auxent *) inp;
   AUXENT_BIGOBJ *ext = (AUXENT_BIGOBJ *) extp;
 
-  memset (ext, 0, AUXESZ);
+  memset (ext, 0, sizeof *ext);
 
   switch (in_class)
     {
     case C_FILE:
       memcpy (ext->File.Name, in->x_file.x_n.x_fname, sizeof (ext->File.Name));
 
-      return AUXESZ;
+      return AUXESZ_BIGOBJ;
 
     case C_STAT:
     case C_LEAFSTAT:
@@ -5921,7 +5939,7 @@ coff_bigobj_swap_aux_out (bfd * abfd,
 	  H_PUT_16 (abfd, (in->x_scn.x_associated >> 16),
 		    ext->Section.HighNumber);
 	  H_PUT_8 (abfd, in->x_scn.x_comdat, ext->Section.Selection);
-	  return AUXESZ;
+	  return AUXESZ_BIGOBJ;
 	}
       break;
     }
@@ -5929,7 +5947,7 @@ coff_bigobj_swap_aux_out (bfd * abfd,
   H_PUT_32 (abfd, in->x_sym.x_tagndx.u32, ext->Sym.WeakDefaultSymIndex);
   H_PUT_32 (abfd, 1, ext->Sym.WeakSearchType);
 
-  return AUXESZ;
+  return AUXESZ_BIGOBJ;
 }
 
 static const bfd_coff_backend_data bigobj_swap_table =

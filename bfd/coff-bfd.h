@@ -36,6 +36,8 @@ struct coff_comdat_info
   long symbol;
 };
 
+#define COFF_COMDAT_SELECT_ASSOCIATIVE 5
+
 /* The used_by_bfd field of a section may be set to a pointer to this
    structure.  */
 
@@ -53,10 +55,29 @@ struct coff_section_tdata
   const char *function;
   /* Optional information about a COMDAT entry; NULL if not COMDAT. */
   struct coff_comdat_info *comdat;
+  /* COFF selection and the associative parent's one-based section-table
+     index.  The index is decoded from input and regenerated for output;
+     graph operations use the resolved pointers below instead.  */
+  unsigned int comdat_selection;
+  unsigned int comdat_associated_parent_index;
+  bool comdat_already_linked;
+  /* Resolved associative parent, if this is an associative COMDAT.  */
+  asection *comdat_associated_parent;
+  /* Head of the direct-child list and link within that list.  */
+  asection *comdat_associated_child;
+  asection *comdat_associated_next;
   int line_base;
   /* Available for individual backends.  */
   void * tdata;
 };
+
+static inline bool
+coff_section_data_associative (const struct coff_section_tdata *section_data)
+{
+  return (section_data != NULL
+	  && section_data->comdat_selection
+	       == COFF_COMDAT_SELECT_ASSOCIATIVE);
+}
 
 /* An accessor macro for the coff_section_tdata structure.  */
 #define coff_section_data(abfd, sec) \

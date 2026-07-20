@@ -298,6 +298,114 @@ coff_object_cleanup (bfd *abfd)
     }
 }
 
+/* Resolve associative COMDATs after all input sections have been created.
+   First turn input section-table indices into parent pointers,
+   then validate complete chains, and only then build child lists for
+   selection and GC.  */
+
+static bool
+coff_resolve_associative_comdats (bfd *abfd)
+{
+  struct coff_section_tdata *ancestor_data;
+  struct coff_section_tdata *parent_data;
+  struct coff_section_tdata *section_data;
+  asection *ancestor;
+  asection *parent;
+  asection *section;
+  unsigned int depth;
+  unsigned int parent_index;
+
+  if (!obj_pe (abfd))
+    return true;
+
+  /* Parent indices may refer forward in the section table, so resolve every
+     immediate edge before following any complete chain.  */
+  for (section = abfd->sections; section != NULL; section = section->next)
+    {
+      section_data = coff_section_data (abfd, section);
+
+      if (!coff_section_data_associative (section_data))
+	continue;
+
+      parent_index = section_data->comdat_associated_parent_index;
+      if (parent_index == 0 || parent_index > INT_MAX)
+	{
+	  _bfd_error_handler
+	    (_("%pB: associative COMDAT section %pA has invalid parent"
+	       " section %u"),
+	     abfd, section, parent_index);
+	  bfd_set_error (bfd_error_bad_value);
+	  return false;
+	}
+
+      parent = coff_section_from_bfd_index (abfd, (int) parent_index);
+      if (parent == bfd_und_section_ptr)
+	parent_data = NULL;
+      else
+	parent_data = coff_section_data (abfd, parent);
+
+      if (parent_data == NULL || parent_data->comdat_selection == 0
+	  || (parent->flags & SEC_LINK_ONCE) == 0)
+	{
+	  _bfd_error_handler
+	    (_("%pB: associative COMDAT section %pA has invalid parent"
+	       " section %u"),
+	     abfd, section, parent_index);
+	  bfd_set_error (bfd_error_bad_value);
+	  return false;
+	}
+
+      section_data->comdat_associated_parent = parent;
+    }
+
+  /* A chain is valid only if it reaches a non-associative COMDAT.  Since every
+     edge is now resolved, a walk longer than the section count is a cycle.  */
+  for (section = abfd->sections; section != NULL; section = section->next)
+    {
+      section_data = coff_section_data (abfd, section);
+
+      if (!coff_section_data_associative (section_data))
+	continue;
+
+      ancestor = section;
+      depth = 0;
+      do
+	{
+	  ancestor_data = coff_section_data (abfd, ancestor);
+	  ancestor = ancestor_data->comdat_associated_parent;
+	  if (++depth > abfd->section_count)
+	    {
+	      _bfd_error_handler
+		(_("%pB: associative COMDAT section %pA has a cyclic"
+		   " parent chain"),
+		 abfd, section);
+	      bfd_set_error (bfd_error_bad_value);
+	      return false;
+	    }
+	}
+      while (coff_section_data_associative
+	     (coff_section_data (abfd, ancestor)));
+    }
+
+  /* Publish child lists only after validation succeeds, so malformed input
+     cannot leave a partially usable graph behind.  */
+  for (section = abfd->sections; section != NULL; section = section->next)
+    {
+      section_data = coff_section_data (abfd, section);
+
+      if (!coff_section_data_associative (section_data))
+	continue;
+
+      parent = section_data->comdat_associated_parent;
+      parent_data = coff_section_data (abfd, parent);
+      section_data->comdat_associated_next
+	= parent_data->comdat_associated_child;
+      parent_data->comdat_associated_child = section;
+    }
+
+  return true;
+}
+
 /* Read in a COFF object and make it into a BFD.  This is used by
    ECOFF as well.  */
 bfd_cleanup
@@ -366,6 +474,9 @@ coff_real_object_p (bfd *abfd,
 	    goto fail;
 	}
     }
+
+  if (!coff_resolve_associative_comdats (abfd))
+    goto fail;
 
   _bfd_coff_free_symbols (abfd);
   return coff_object_cleanup;
@@ -2685,6 +2796,49 @@ coff_find_inliner_info (bfd *abfd,
   return (found);
 }
 
+/* PE/COFF gives associative children no independent key for matching them
+   across duplicate parents.  As a GNU correspondence rule, pair a child with
+   the same-named child at the same direct-child occurrence under the parent
+   that survived selection.  A missing occurrence has no replacement.  */
+
+static asection *
+coff_kept_associative_section (asection *sec, asection *kept_parent)
+{
+  struct coff_section_tdata *child_data;
+  struct coff_section_tdata *sec_data;
+  asection *child;
+  asection *parent;
+  const char *name;
+  unsigned int occurrence;
+
+  sec_data = coff_section_data (sec->owner, sec);
+  parent = sec_data->comdat_associated_parent;
+  name = bfd_section_name (sec);
+  occurrence = 0;
+
+  for (child = sec->owner->sections; child != sec; child = child->next)
+    {
+      child_data = coff_section_data (child->owner, child);
+      if (coff_section_data_associative (child_data)
+	  && child_data->comdat_associated_parent == parent
+	  && strcmp (bfd_section_name (child), name) == 0)
+	++occurrence;
+    }
+
+  for (child = kept_parent->owner->sections; child != NULL;
+       child = child->next)
+    {
+      child_data = coff_section_data (child->owner, child);
+      if (coff_section_data_associative (child_data)
+	  && child_data->comdat_associated_parent == kept_parent
+	  && strcmp (bfd_section_name (child), name) == 0
+	  && occurrence-- == 0)
+	return child;
+    }
+
+  return NULL;
+}
+
 int
 coff_sizeof_headers (bfd *abfd, struct bfd_link_info *info)
 {
@@ -2769,11 +2923,50 @@ _bfd_coff_section_already_linked (bfd *abfd,
 				  asection *sec,
 				  struct bfd_link_info *info)
 {
+  struct coff_section_tdata *sec_data;
   flagword flags;
   const char *name, *key;
   struct bfd_section_already_linked *l;
   struct bfd_section_already_linked_hash_entry *already_linked_list;
   struct coff_comdat_info *s_comdat;
+
+  sec_data = coff_section_data (abfd, sec);
+
+  if (sec_data != NULL && sec_data->comdat_already_linked)
+    return sec->output_section == bfd_abs_section_ptr;
+
+  if (coff_section_data_associative (sec_data))
+    {
+      struct coff_section_tdata *parent_data;
+      asection *parent;
+
+      /* An associative child is selected by its parent, never by its own
+	 name.  Resolve the parent first; if it lost, discard this child and
+	 redirect it to the corresponding child of the parent that won.  */
+      parent = sec_data->comdat_associated_parent;
+      parent_data = coff_section_data (parent->owner, parent);
+
+      sec_data->comdat_already_linked = true;
+      if (!parent_data->comdat_already_linked)
+	_bfd_coff_section_already_linked (parent->owner, parent, info);
+
+      if (parent->output_section == bfd_abs_section_ptr)
+	{
+	  asection *kept_parent = parent->kept_section;
+	  while (kept_parent != NULL
+		 && kept_parent->output_section == bfd_abs_section_ptr
+		 && kept_parent->kept_section != NULL)
+	    kept_parent = kept_parent->kept_section;
+
+	  sec->output_section = bfd_abs_section_ptr;
+	  if (kept_parent != NULL)
+	    sec->kept_section = coff_kept_associative_section (sec,
+							       kept_parent);
+	  return true;
+	}
+
+      return false;
+    }
 
   if (sec->output_section == bfd_abs_section_ptr)
     return false;
@@ -2781,6 +2974,9 @@ _bfd_coff_section_already_linked (bfd *abfd,
   flags = sec->flags;
   if ((flags & SEC_LINK_ONCE) == 0)
     return false;
+
+  if (sec_data != NULL)
+    sec_data->comdat_already_linked = true;
 
   /* The COFF backend linker doesn't support group sections.  */
   if ((flags & SEC_GROUP) != 0)
@@ -3050,8 +3246,26 @@ _bfd_coff_gc_mark (struct bfd_link_info *info,
 		   coff_gc_mark_hook_fn gc_mark_hook)
 {
   bool ret = true;
+  struct coff_section_tdata *sec_data;
+
+  sec_data = coff_section_data (sec->owner, sec);
 
   sec->gc_mark = 1;
+
+  if (sec_data != NULL)
+    {
+      asection *child;
+
+      /* Associated metadata need not relocate against its parent.  Follow
+	 explicit ownership edges so a live definition retains every direct
+	 child; recursion handles associative chains.  */
+      for (child = sec_data->comdat_associated_child; child != NULL;
+	   child = coff_section_data (child->owner, child)
+	     ->comdat_associated_next)
+	if (child->output_section != bfd_abs_section_ptr && !child->gc_mark
+	    && !_bfd_coff_gc_mark (info, child, gc_mark_hook))
+	  return false;
+    }
 
   /* Look through the section relocs.  */
   if ((sec->flags & SEC_RELOC) != 0
@@ -3172,13 +3386,22 @@ coff_gc_sweep (bfd *abfd ATTRIBUTE_UNUSED, struct bfd_link_info *info)
 
       for (o = sub->sections; o != NULL; o = o->next)
 	{
-	    /* Keep debug and special sections.  */
+	  struct coff_section_tdata *section_data;
+
+	  section_data = coff_section_data (sub, o);
+
+	  /* Keep debug and special sections.  */
 	  if ((o->flags & (SEC_DEBUGGING | SEC_LINKER_CREATED)) != 0
 	      || (o->flags & (SEC_ALLOC | SEC_LOAD | SEC_RELOC)) == 0)
 	    o->gc_mark = 1;
+	  /* Keep PE linker data.  Older producers encode unwind ownership only
+	     in section-name suffixes.  Keep those sections as a compatibility
+	     fallback, but let true associative unwind sections follow their
+	     parent's mark.  */
 	  else if (startswith (o->name, ".idata")
-		   || startswith (o->name, ".pdata")
-		   || startswith (o->name, ".xdata")
+		   || ((startswith (o->name, ".pdata")
+			|| startswith (o->name, ".xdata"))
+		       && !coff_section_data_associative (section_data))
 		   || is_subsection (o->name, ".didat")
 		   || startswith (o->name, ".rsrc"))
 	    o->gc_mark = 1;

@@ -1219,7 +1219,7 @@ EXTRA_libbfd_la_SOURCES = $(CFILES)
 libbfd_la_DEPENDENCIES = $(OFILES) ofiles ../libsframe/libsframe.la
 libbfd_la_LIBADD = `cat ofiles` @SHARED_LIBADD@ $(LIBDL) $(ZLIB) $(ZSTD_LIBS) ../libsframe/libsframe.la
 BFD_H_FILES = bfd-in.h libbfd.c hash.c section.c syms.c \
-	archive.c archures.c bfd.c bfdio.c \
+	archive.c archures.c bfd.c bfdio.c coff-bfd.c \
 	cache.c compress.c corefile.c format.c linker.c opncls.c \
 	reloc.c simple.c stab-syms.c stabs.c targets.c
 

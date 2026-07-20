@@ -177,6 +177,8 @@ struct comdat_hash_entry
   struct internal_syment isym;
   char *symname;
   flagword sec_flags;
+  unsigned int selection;
+  unsigned int associated_section;
   char *comdat_name;
   long comdat_symbol;
 };

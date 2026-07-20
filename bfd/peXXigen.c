@@ -71,6 +71,7 @@
 #include "coff/internal.h"
 #include "bfdver.h"
 #include "libiberty.h"
+#include <limits.h>
 #include <wchar.h>
 #include <wctype.h>
 
@@ -3161,6 +3162,72 @@ _bfd_XX_bfd_copy_private_bfd_data_common (bfd * ibfd, bfd * obfd)
 	}
     }
 
+    /* Per-section copying preserves scalar COMDAT data, but filtering and
+      reordering invalidate input parent indices and pointer links.  Map each
+     input parent to its output section, then rebuild an output-local graph
+     using final target indices.  */
+  {
+    struct coff_section_tdata *parent_data;
+    struct coff_section_tdata *section_data;
+    asection *input_parent;
+    asection *parent;
+    asection *section;
+    unsigned int parent_index;
+
+    for (section = obfd->sections; section != NULL; section = section->next)
+      {
+	section_data = coff_section_data (obfd, section);
+	if (section_data == NULL)
+	  continue;
+
+	section_data->comdat_associated_child = NULL;
+	section_data->comdat_associated_next = NULL;
+      }
+
+    for (section = obfd->sections; section != NULL; section = section->next)
+      {
+	section_data = coff_section_data (obfd, section);
+	if (!coff_section_data_associative (section_data))
+	  continue;
+
+	parent_index = section_data->comdat_associated_parent_index;
+	parent = section_data->comdat_associated_parent;
+	if (parent == NULL)
+	  {
+	    input_parent = NULL;
+	    if (parent_index != 0 && parent_index <= INT_MAX)
+	      input_parent
+		= coff_section_from_bfd_index (ibfd, (int) parent_index);
+	    if (input_parent != NULL && input_parent != bfd_und_section_ptr)
+	      parent = input_parent->output_section;
+	  }
+	if (parent == NULL || parent->owner != obfd)
+	  {
+	    _bfd_error_handler
+	      (_("%pB: associative COMDAT section %pA has no copied parent"
+		 " section %u"),
+	       obfd, section, parent_index);
+	    bfd_set_error (bfd_error_bad_value);
+	    return false;
+	  }
+
+	parent_data = coff_section_data (obfd, parent);
+	if (parent_data == NULL)
+	  {
+	    parent->used_by_bfd
+	      = bfd_zalloc (obfd, sizeof (struct coff_section_tdata));
+	    if (parent->used_by_bfd == NULL)
+	      return false;
+	    parent_data = coff_section_data (obfd, parent);
+	  }
+	section_data->comdat_associated_parent_index = parent->target_index;
+	section_data->comdat_associated_parent = parent;
+	section_data->comdat_associated_next
+	  = parent_data->comdat_associated_child;
+	parent_data->comdat_associated_child = section;
+      }
+  }
+
   return true;
 }
 
@@ -3173,12 +3240,16 @@ _bfd_XX_bfd_copy_private_section_data (bfd *ibfd,
 				       asection *osec,
 				       struct bfd_link_info *link_info)
 {
+  struct coff_section_tdata *input_data;
+
   if (link_info != NULL
       || bfd_get_flavour (ibfd) != bfd_target_coff_flavour)
     return true;
 
-  if (coff_section_data (ibfd, isec) != NULL
-      && pei_section_data (ibfd, isec) != NULL)
+  input_data = coff_section_data (ibfd, isec);
+  if (input_data != NULL
+      && (pei_section_data (ibfd, isec) != NULL
+	  || input_data->comdat_selection != 0))
     {
       if (coff_section_data (obfd, osec) == NULL)
 	{
@@ -3188,7 +3259,15 @@ _bfd_XX_bfd_copy_private_section_data (bfd *ibfd,
 	    return false;
 	}
 
-      if (pei_section_data (obfd, osec) == NULL)
+      /* Keep the input parent index until all output sections exist.  The
+	 common private-BFD copy pass above remaps it to the copied parent.  */
+      coff_section_data (obfd, osec)->comdat_selection
+	= input_data->comdat_selection;
+      coff_section_data (obfd, osec)->comdat_associated_parent_index
+	= input_data->comdat_associated_parent_index;
+
+      if (pei_section_data (ibfd, isec) != NULL
+	  && pei_section_data (obfd, osec) == NULL)
 	{
 	  size_t amt = sizeof (struct pei_section_tdata);
 	  coff_section_data (obfd, osec)->tdata = bfd_zalloc (obfd, amt);
@@ -3196,10 +3275,13 @@ _bfd_XX_bfd_copy_private_section_data (bfd *ibfd,
 	    return false;
 	}
 
-      pei_section_data (obfd, osec)->virt_size =
-	pei_section_data (ibfd, isec)->virt_size;
-      pei_section_data (obfd, osec)->pe_flags =
-	pei_section_data (ibfd, isec)->pe_flags;
+      if (pei_section_data (ibfd, isec) != NULL)
+	{
+	  pei_section_data (obfd, osec)->virt_size
+	    = pei_section_data (ibfd, isec)->virt_size;
+	  pei_section_data (obfd, osec)->pe_flags
+	    = pei_section_data (ibfd, isec)->pe_flags;
+	}
     }
 
   return true;
